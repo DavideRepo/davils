@@ -205,5 +205,131 @@ def mac(modes1, modes2):
 
 
 
+def simulate_lti(system, u, t, in_noise=None, out_noise=None):
+    if system.dt is None:
+        dt = t[1] - t[0]
+        Ad = sp.linalg.expm(system.A * dt)
+        Bd = (Ad - np.eye(len(Ad))) @ np.linalg.inv(system.A) @ system.B
+        system = sp.signal.dlti(Ad, Bd, system.C, system.D, dt=dt)
+
+    if in_noise is None:
+        in_noise = np.zeros((len(system.A), len(t)))
+    if out_noise is None:
+        out_noise = np.zeros((len(system.C), len(t)))
+
+    x = np.zeros((len(system.A), len(t)))
+    y = np.zeros((len(system.C), len(t)))
+    for k in range(len(t) - 1):
+        x[:, k + 1] = system.A @ x[:, k] + system.B @ u[:, k] + in_noise[:, k]
+        y[:, k] = system.C @ x[:, k] + system.D @ u[:, k] + out_noise[:, k]
+
+    return t, y, x
+
+
+def kalman_filter(system, u, y, t, Q, R, S=None):
+    """
+
+    :param system:
+    :param u:
+    :param y:
+    :param t:
+    :param Q:
+    :param R:
+    :param S:
+    :return:
+    """
+
+    if system.dt is None:
+        raise TypeError('Linea time-invariant system representation must be in discrete time.')
+
+    D = system.D
+    C = system.C
+    A = system.A
+    B = system.B
+    x_e = np.zeros((len(A), len(t)))
+    P = np.zeros((len(A), len(A), len(t)))
+
+    if S is None:
+        S = np.zeros_like(A)
+
+    for k in range(len(t)-1):
+        global iter_
+        iter_ = k
+
+        Si = C @ P[:, :, k] @ C.T + R
+        Si = (Si + Si.T) / 2
+        Si_i = np.linalg.inv(Si)
+        x_e[:, k] += P[:, :, k] @ C.T @ Si_i @ (y[:, k] - C @ x_e[:, k] - D @ u[:, k])
+        P[:, :, k] += -P[:, :, k] @ C.T @ Si_i @ C @ P[:, :, k]
+
+        K = (A @ P[:, :, k] @ C.T + S) @ Si_i
+        x_e[:, k + 1] = A @ x_e[:, k] + B @ u[:, k] + K @ (y[:, k] - C @ x_e[:, k] - D @ u[:, k])
+        P[:, :, k + 1] = A @ P[:, :, k] @ A.T + K @ (A @ P[:, :, k] @ C.T + S).T + Q
+        P[:, :, k + 1] = (P[:, :, k + 1] + P[:, :, k + 1].T)/2
+
+    return x_e, P
+
+
+def augmented_kalman_filter(t, y, p0, A, B, G, J, Q, R, E):
+    """
+    Estimates the state of a LINEAR system wwith GAUSSIAN distributed variables.
+    Knowing the only some observations of the state.
+
+    Parameters
+    ----------
+    t : array float
+        time vector n.
+    y : matrix float
+        mxn observations.
+    p0 : array float
+        pxn initial inputs.
+    A : matrix float
+        NxN state matrix.
+    B : matrix float
+        Nxp state-input matrix, where p is the number of inputs.
+    G : matrix float
+        mxN state-observation matrix.
+    J : matrix float
+        mxp input-observation matrix.
+    Q : metrix float
+        NxN covariance noise in state.
+    R : matrix float
+        mxm covariance measurement noise.
+    E : matrix float
+        pxp covariance input noise.
+
+    Returns
+    -------
+    x_hat : array float
+        Nxn estimated states.
+    P : matrix float
+        NxNxn estimation uncertainty.
+
+    """
+    npp = B.shape[1]
+    ns = A.shape[0]
+    ny = G.shape[0]
+    x_hat = np.zeros((ns + npp, len(t)))
+    x_hat[ns:, 0] = p0
+    P = np.zeros((ns + npp, ns + npp, len(t)))
+    Aa = np.vstack((np.hstack((A, B)),
+                    np.hstack((np.zeros((npp, ns)), np.eye(npp)))))
+    Ga = np.hstack((G, J))
+    Qa = np.vstack((np.hstack((Q, np.zeros((ns, npp)))),
+                    np.hstack((np.zeros((npp, ns)), E))))
+    for k in range(len(t) - 1):
+        # measurement update
+        Omega = Ga @ P[:, :, k] @ Ga.T + R
+        Omega = (Omega + Omega.T) / 2  # force to be symmetric
+        x_hat[:, k] = x_hat[:, k] + P[:, :, k] @ Ga.T @ npla.inv(Omega) @ (y_st[:, k] - Ga @ x_hat[:, k])
+        P[:, :, k] = P[:, :, k] - P[:, :, k] @ Ga.T @ npla.inv(Omega) @ Ga @ P[:, :, k]
+        # time update
+        # K = (Aa @ P[:,:,k] @ Ga.T + S)@ npla.inv(Omega)
+        x_hat[:, k + 1] = Aa @ x_hat[:, k]
+        P[:, :, k + 1] = Aa @ P[:, :, k] @ Aa.T + Qa
+        P[:, :, k + 1] = (P[:, :, k + 1] + P[:, :, k + 1].T) / 2  # force to be symmetric
+    x = x_hat[0:ns, :]
+    p = x_hat[ns:, :]
+    return x, p, P
 
 
