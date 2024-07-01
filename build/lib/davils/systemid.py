@@ -1,9 +1,8 @@
 import numpy as np
 import scipy as sp
 from matplotlib import pyplot as plt
-from matplotlib.colors import LinearSegmentedColormap, ListedColormap, BoundaryNorm
 import mplcursors
-from .dynamics import mpcval as mpc
+
 
 def moving_average(data, n=3):
 
@@ -244,12 +243,12 @@ def PSD_matrix(data, window, f_s, plot=False, findPeaks=False, plotOverlay=False
     """
 
     data = np.array(data)
-    if data.shape[0] > data.shape[1]: # Transpose data if channels are in columns
+    if data.shape[0] > data.shape[1]:
         data = data.T
 
     nch = data.shape[0]
+    #data_CSD = [[0] * data.shape[0] for i in range(data.shape[0])]
     f_CSD, _ = sp.signal.csd(data[0, :], data[0, :], f_s, window)
-
     data_CSD = np.zeros((nch, nch, len(f_CSD)), dtype=complex)
 
     for i in range(nch):
@@ -321,18 +320,17 @@ def FDD(data_PSD, f_PSD, f_s, plot=False, plotLim=None, plotLog=False, findPeaks
     nf = len(data_PSD[0][0])
 
     S_val = np.zeros((nch, nf))
-    S_vec_sx = np.zeros((nch, nch, nf), dtype='complex')
-    S_vec_dx = np.zeros((nch, nch, nf), dtype='complex')
-    # S_vec_sx = [np.zeros((nch, nch)) for _ in range(nf)]
-    # S_vec_dx = [np.zeros((nch, nch)) for _ in range(nf)]
+    S_vec_sx = [np.zeros((nch, nch)) for _ in range(nf)]
+    S_vec_dx = [np.zeros((nch, nch)) for _ in range(nf)]
 
     # Performing SVD
     for i in range(nf):
         U, S, V = np.linalg.svd(PSD_matrix[:, :, i])
         # S = np.diag(S)
-        S_val[:,i] = np.sqrt(S)
-        S_vec_sx[:,:,i] = U
-        S_vec_dx[:,:,i] = V
+        Srad = np.sqrt(S)
+        S_val[:,i] = Srad
+        S_vec_sx[i] = np.transpose(U)
+        S_vec_dx[i] = np.transpose(V)
 
     if findPeaks:
         # peaks_index, _ = spsi.find_peaks(np.abs(S_val[0, 0]), distance=20, height=0.2*np.max(S_val[0,0]),
@@ -370,7 +368,7 @@ def FDD(data_PSD, f_PSD, f_s, plot=False, plotLim=None, plotLog=False, findPeaks
             plt.xlim(0, plotLim)
             plt.grid()
 
-    return S_val[:num_s_val,:], S_vec_sx[:,:num_s_val,:], S_vec_dx[:num_s_val,:,:]
+    return S_val[:num_s_val,:], [el[:, :3] for el in S_vec_dx], [el[:3, :] for el in S_vec_sx], peaks
 
 
 def FDD_modes(S_val, S_vec, peaks_index=None, plot=None, model=None):
@@ -530,7 +528,7 @@ def FDD_get_modeshapes(f_CSD, S_vec_sx, scale=None, x=None, y=None, z=None, drop
     return FDD_freq_ID, FDD_mode_shapes_ID
 
 
-def koma_stabplot_matplot(lambd, orders, frequency_unit='rad/s', damped_freq=False, flim=None, overlay=None, f_n=None, overlaylabel=None, plottitle=None, mpcgradient=False, phi=None, save=False, filename=None):
+def koma_stabplot_matplot(lambd, orders, frequency_unit='rad/s', damped_freq=False, flim=None, overlay=None, f_n=None, overlaylabel=None):
     """
 
     Parameters
@@ -565,28 +563,18 @@ def koma_stabplot_matplot(lambd, orders, frequency_unit='rad/s', damped_freq=Fal
     elif frequency_unit.lower() == 'hz':
         x = omega/2/np.pi
         xlabel = f'$f_{"d" if damped_freq else "n"} \; [{frequency_unit}]$'
-        
+
     # Create frequency/period axis and corresponding labels
     xi = -np.real(lambd) / np.abs(lambd)
-    ylabel = r'Model order $n$'
+    ylabel = 'n'
+    text = [f'xi = {xi_i * 100:.2f}% ix = {ix}' for ix, xi_i in enumerate(xi)]
 
     # Plotting
-    fig, ax = plt.subplots(figsize=(18, 9))
-    if mpcgradient:
-        x_grad = mpc(phi)
-        cmap = LinearSegmentedColormap.from_list("my_colormap", ["red", "blue"])
-        scatter = ax.scatter(x, orders, c=x_grad**2, cmap=cmap, vmin=0, vmax=1, alpha=0.6, s=20, label='SSI poles')  # power-2 to make it more visible
-        text = [f'xi = {xi_i*100:.2f}% mpc = {x_grad*100:.2f}% \nfreq = {x_i:.2f} {frequency_unit} idx = {ix}' for ix, xi_i, x_grad, x_i in zip(range(len(xi)), xi, x_grad, x)]
-    else:    
-        scatter = ax.scatter(x, orders, c='blue', alpha=0.6, s=20, label='SSI poles')
-        text = [f'xi = {xi_i*100:.2f}% freq = {x_i:.2f} {frequency_unit} idx = {ix}' for ix, xi_i, x_i in zip(range(len(xi)), xi, x)]
-
+    fig, ax = plt.subplots(figsize=(12, 9))
+    ax.scatter(x, orders, c='blue', alpha=0.6, s=20, label='SSI poles')
     ax.set(xlabel=xlabel, ylabel=ylabel)
-    ax.xaxis.label.set_size(16)  # Set xlabel font size
-    ax.yaxis.label.set_size(16)  # Set ylabel font size
-    ax.set_title('Cov-SSI Stabilization Plot \n Poles', fontsize=16)
+    ax.set_title('Poles')
     ax.set_xticks(np.arange(0,25+1))
-    ax.tick_params(axis='both', which='major', labelsize=12)
     ax.grid(True)
 
     if f_n is not None:
@@ -604,31 +592,17 @@ def koma_stabplot_matplot(lambd, orders, frequency_unit='rad/s', damped_freq=Fal
             signal_scaled = signal * signal_scaling_factor
             
             if overlaylabel is None:
-                label = 'overlay' + f' {idx}'
+                label = Overlay + f' {idx}'
             else:
-                label = overlaylabel + f' ${idx+1}$'
-            ax.plot(signal_x, signal_scaled, alpha=0.75, label=label)
+                label = overlaylabel + f'$_{idx+1}$'
+            ax.plot(signal_x, signal_scaled, alpha=0.6, label=label)
 
     if flim is not None:
         ax.set_xlim(0, flim)
-    
-    if plottitle is not None:
-        ax.set_title(plottitle, fontsize=16)
-    
-    plt.legend(fontsize=14)
+
+    plt.legend()
+    mplcursors.cursor(hover=True).connect("add", lambda sel: sel.annotation.set_text(text[int(sel.index)]))
     plt.tight_layout()
-
-    if save:
-        if filename:
-            plt.savefig(filename, dpi=150)
-        else:
-            plt.savefig('SSI_stabilization_plot.png', dpi=150)
-        return
-
-    # mplcursors.cursor(hover=True).connect("add", lambda sel: sel.annotation.set_text(text[int(sel.index)]))
-    cursor = mplcursors.cursor(scatter, hover=True)
-    cursor.connect("add", lambda sel: sel.annotation.set_text(text[int(sel.index)]))
-    # cursor.connect("remove", lambda sel: sel.annotation.remove())
-
     plt.show()
+
     return fig

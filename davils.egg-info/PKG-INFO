@@ -1,0 +1,48 @@
+Metadata-Version: 2.1
+Name: davils
+Version: 1.0.0
+Summary: Davide's Utilities for Python.
+Home-page: https://github.com/DavideRepo/davils
+Author: Davide Raviolo
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.6
+Description-Content-Type: text/markdown
+Requires-Dist: numpy
+Requires-Dist: scipy
+Requires-Dist: matplotlib
+Requires-Dist: h5py
+
+~~~~~~~~~~~~~~~~~~~~~~~
+DAVILS
+~~~~~~~~~~~~~~~~~~~~~~~
+
+DAVILS are som Python tools 'useful' for Davide.
+
+
+Installation and usage
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Either download the repository to your computer and install, e.g. by pip
+
+.. code-block::
+
+   pip install .
+
+
+or install directly from the python package index.
+
+.. code-block::
+
+   pip install git+https://github.com/DavideRepo/davils.gitt@main
+
+
+Citation
+~~~~~~~~~~~~~~~~~~~~~~~
+...
+
+
+Support
+~~~~~~~~~~~~~~~~~~~~~~~
+...

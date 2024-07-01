@@ -1,6 +1,6 @@
 import numpy as np
 import scipy as sp
-# from matplotlib import pyplot as plt
+from matplotlib import pyplot as plt
 
 
 def shearframe(n, k, c, m, kg=0, relative_dampers=True):    # from Knut utilis
@@ -59,6 +59,47 @@ def shearframe(n, k, c, m, kg=0, relative_dampers=True):    # from Knut utilis
     return K, C, M, Kg
 
 
+def linear_newmark_krenk(M, C, K, f, u0, udot0, h, gamma, beta):
+    # Initialize variables
+    u = np.zeros((M.shape[0], f.shape[1]))
+    udot = np.zeros((M.shape[0], f.shape[1]))
+    u2dot = np.zeros((M.shape[0], f.shape[1]))
+
+    # Insert initial conditions
+    u[:, 0] = u0
+    udot[:, 0] = udot0
+
+    # Calculate "modified mass"
+    if len(M) == 1:
+        Mstar = M + gamma * h * C + beta * h ** 2 * K
+    else:
+        Mstar = M + gamma * h * C + beta * h ** 2 * K
+        Mstar_inv = np.linalg.inv(Mstar)
+
+    # Calculate initial accelerations
+    if len(M) == 1:
+        u2dot[:, 0] = (f[:, 0] - C @ udot[:, 0] - K @ u[:, 0]) / M
+    else:
+        u2dot[:, 0] = np.linalg.solve(M, f[:, 0] - C @ udot[:, 0] - K @ u[:, 0])
+
+    for n in range(0, f.shape[1] - 1):
+
+        # Predicion step
+        udotstar = udot[:, n] + (1 - gamma) * h * u2dot[:, n]
+        ustar = u[:, n] + h * udot[:, n] + (1 / 2 - beta) * h ** 2 * u2dot[:, n]
+        # u2dot[:,n+1] = np.linalg.solve(Mstar, f[:,n+1] - C@udotstar - K@ustar)
+        if len(M) == 1:
+            u2dot[:, n + 1] = (f[:, n + 1] - C @ udotstar - K @ ustar) / Mstar
+        else:
+            u2dot[:, n + 1] = Mstar_inv @ (f[:, n + 1] - C @ udotstar - K @ ustar)
+
+        # Correction step
+        udot[:, n + 1] = udotstar + gamma * h * u2dot[:, n + 1]
+        u[:, n + 1] = ustar + beta * h ** 2 * u2dot[:, n + 1]
+
+    return u, udot, u2dot
+
+
 def get_state_space(m, k, c, dt=None, s_u=None, s_a=None, s_v=None, s_d=None):
     """
     Defines the state space representation given the system matrices K, M, and C and the selection matrices S_a, S,v,
@@ -110,16 +151,13 @@ def get_state_space(m, k, c, dt=None, s_u=None, s_a=None, s_v=None, s_d=None):
     Dc = np.vstack((s_d.T @ O @ s_u, s_v.T @ O @ s_u, s_a.T @ mi @ s_u))  # Direct Transmission Matrix Dc
                                                                     # (n_output*n_dof x n_input=n_dof)
 
-    system_clti = sp.signal.lti(Ac, Bc, Cc, Dc)                     # Continuous-time linear time invariant system
-    system_dlti = None
-
     if dt is not None:
         Ad = sp.linalg.expm(Ac * dt)
         Bd = (Ad - np.eye(len(Ad))) @ np.linalg.inv(Ac) @ Bc
+        return sp.signal.dlti(Ad, Bd, Cc, Dc, dt=dt)              # Discrete-time linear time invariant system
 
-        system_dlti = sp.signal.dlti(Ad, Bd, Cc, Dc, dt=dt)              # Discrete-time linear time invariant system
-
-    return system_clti, system_dlti
+    else:
+        return sp.signal.lti(Ac, Bc, Cc, Dc)                     # Continuous-time linear time invariant system
 
 
 def get_state_space_modal(omega, phi, gamma, mass=None, dt=None, s_u=None, s_a=None, s_v=None, s_d=None):
@@ -198,11 +236,12 @@ def mac(modes1, modes2):
     mac_matrix = np.zeros((np.shape(modes1)[1], np.shape(modes2)[1]))
     for i in range(np.shape(modes1)[1]):
         for j in range(np.shape(modes2)[1]):
-            mac_matrix[i,j] = np.dot(modes1[:,i], modes2[:,j])**2 / \
-                              np.dot(np.dot(modes1[:,i], modes1[:,i]), np.dot(modes2[:,j], modes2[:,j]))
+            mac_matrix[i,j] = (np.abs(modes1[:,i].T @ np.conj(modes2[:,j]))**2) / \
+                              ((modes1[:,i].T @ np.conj(modes1[:,i])) * (modes2[:,j].T @ np.conj(modes2[:,j])))
+            # mac_matrix[i,j] = np.dot(modes1[:,i], modes2[:,j])**2 / \
+            #                   np.dot(np.dot(modes1[:,i], modes1[:,i]), np.dot(modes2[:,j], modes2[:,j]))
 
     return mac_matrix
-
 
 
 def simulate_lti(system, u, t, in_noise=None, out_noise=None):
@@ -219,9 +258,14 @@ def simulate_lti(system, u, t, in_noise=None, out_noise=None):
 
     x = np.zeros((len(system.A), len(t)))
     y = np.zeros((len(system.C), len(t)))
+
+    A = system.A
+    B = system.B
+    C = system.C
+    D = system.D
     for k in range(len(t) - 1):
-        x[:, k + 1] = system.A @ x[:, k] + system.B @ u[:, k] + in_noise[:, k]
-        y[:, k] = system.C @ x[:, k] + system.D @ u[:, k] + out_noise[:, k]
+        x[:, k + 1] = A @ x[:, k] + B @ u[:, k] + in_noise[:, k]
+        y[:, k] = C @ x[:, k] + D @ u[:, k] + out_noise[:, k]
 
     return t, y, x
 
@@ -253,9 +297,10 @@ def kalman_filter(system, u, y, t, Q, R, S=None):
         S = np.zeros_like(A)
 
     for k in range(len(t)-1):
-        global iter_
-        iter_ = k
-
+        
+        # Si can be inverted? buh...
+        
+        
         Si = C @ P[:, :, k] @ C.T + R
         Si = (Si + Si.T) / 2
         Si_i = np.linalg.inv(Si)
@@ -270,7 +315,7 @@ def kalman_filter(system, u, y, t, Q, R, S=None):
     return x_e, P
 
 
-def augmented_kalman_filter(t, y, p0, A, B, G, J, Q, R, E):
+def augmented_kalman_filter(t, y, p0, A, B, G, J, Q, R, E): # TO BE CORRECTED/MODIFIED
     """
     Estimates the state of a LINEAR system wwith GAUSSIAN distributed variables.
     Knowing the only some observations of the state.
@@ -333,3 +378,278 @@ def augmented_kalman_filter(t, y, p0, A, B, G, J, Q, R, E):
     return x, p, P
 
 
+def joint_inputstate(system, y, t, Q, R, S=None):
+    """
+
+    :param system:
+    :param u:
+    :param y:
+    :param t:
+    :param Q:
+    :param R:
+    :param S:
+    :return:
+    """
+
+    if system.dt is None:
+        raise TypeError('Linea time-invariant system representation must be in discrete time.')
+
+    D = system.D
+    C = system.C
+    A = system.A
+    B = system.B
+    x_e = np.zeros((len(A), len(t)))
+    u_e = np.zeros((len(D.T), len(t)))
+    Px = np.zeros((len(A), len(A), len(t)))
+    Pu = np.zeros((len(D.T), len(D.T), len(t)))
+    Pxu = np.zeros((len(A), len(D.T), len(t)))
+    Pux = np.zeros((len(D.T), len(A), len(t)))
+
+    if S is None:
+        S = np.zeros((len(A), len(C)))
+
+    for k in range(len(t)-1):       
+        # Input estimation
+        V = C @ Px[:, :, k] @ C.T + R
+        V = (V + V.T) / 2                                           # Force symmetry
+        V_i = np.linalg.inv(V)
+        M = np.linalg.inv(D.T @ V_i @ D) @ D.T @ V_i
+        u_e[:,k] = M @ (y[:,k] - C @ x_e[:,k])
+        Pu[:,:,k] = np.linalg.inv(D.T @ V_i @ D)
+        Pu[:, :, k] = (Pu[:, :, k] + Pu[:, :, k].T)/2               # Force symmetry
+        
+        # Measurement update
+        K = Px[:,:,k] @ C.T @ V_i
+        x_e[:, k] += K @ (y[:, k] - C @ x_e[:, k] - D @ u_e[:, k])
+        Px[:,:,k] += -K @ (V - D @ Pu[:,:,k] @ D.T) @ K.T
+        Pxu[:,:,k] = -K @ D @ Pu[:,:,k]
+        Pux[:,:,k] = Pxu[:,:,k].T
+        
+        # Time update
+        x_e[:, k + 1] = A @ x_e[:, k] + B @ u_e[:, k]
+        N = A @ K @ (np.eye(len(C)) - D @ M) + B @ M
+        Px[:,:,k+1] = (np.hstack((A,B)) @ np.hstack((np.vstack((Px[:, :, k], Pux[:, :, k])), np.vstack((Pxu[:, :, k], Pu[:, :, k])))) 
+                       @ np.vstack((A.T, B.T)) + Q - N @ S.T - S @ N.T)
+        Px[:, :, k + 1] = (Px[:, :, k + 1] + Px[:, :, k + 1].T)/2   # Force symmetry
+
+    return x_e, u_e, Px, Pu, Pxu
+
+
+def dual_kalman_filter(system, y, t, Q, R, S=None):  # beta, not working
+    """
+    ### understaind why it does not work well
+
+    :param system:
+    :param u:
+    :param y:
+    :param t:
+    :param Q:
+    :param R:
+    :param S:
+    :return:
+    """
+
+    if system.dt is None:
+        raise TypeError('Linea time-invariant system representation must be in discrete time.')
+
+    D = system.D  ## J
+    C = system.C  ## G
+    A = system.A
+    B = system.B
+    x_e = np.zeros((len(A), len(t)))
+    u_e = np.zeros((len(D.T), len(t)))
+    Px = np.zeros((len(A), len(A), len(t)))
+    Pu = np.zeros((len(D.T), len(D.T), len(t)))
+    Qu = Q[:len(D.T), :len(D.T)]
+
+    if S is None:
+        S = np.zeros_like(A)
+
+    for k in range(1, len(t)-1):
+        # Input prediction
+        u = u_e[:,k-1]         ###
+        Pu[:,:,k] = Pu[:,:,k-1] + Qu
+
+        # Input update
+        Kp = Pu[:,:,k] @ D.T @ np.linalg.inv(D @ Pu[:,:,k] @ D.T + R)
+        u_e[:,k] = u + Kp @ (y[:, k] - C @ x_e[:, k-1] - D @ u)
+        Pu[:,:,k] += -Kp @ D @ Pu[:,:,k]
+
+        # State prediction
+        x_e[:, k] = A @ x_e[:, k-1] + B @ u_e[:, k]
+        Px[:,:,k] = A @ Px[:,:,k-1] @ A.T + Q
+
+        # State update
+        Kx = Px[:,:,k] @ C.T @ np.linalg.inv(C @ Px[:,:,k] @ C.T + R)
+        x_e[:,k] += Kx @ (y[:, k] - C @ x_e[:, k] - D @ u_e[:, k])
+        Px[:,:,k] += -Kx @ C @ Px[:,:,k]
+
+    return x_e, u_e, Px, Pu
+
+
+def xmacmat_alt(phi1, phi2=None, conjugates=True, return_alternative=False):
+    """
+    Alternative implementation. Modal assurance criterion numbers, cross-matrix between two modal transformation matrices (modes stacked as columns).
+
+    Arguments
+    ---------------------------
+    phi1 : double
+        reference modes
+    phi2 : double, optional
+        modes to compare with, if not given (i.e., equal default value None), phi1 vs phi1 is assumed
+    conjugates : True, optional
+        check the complex conjugates of all modes as well (should normally be True)
+
+    Returns
+    ---------------------------
+    macs : boolean
+        matrix of MAC numbers
+    """
+
+    if phi2 is None:
+        phi2 = phi1
+
+    # if isinstance(phi1, list) and isinstance(phi2, list):
+    #     phi1=np.array(phi1)
+    #     phi2=np.array(phi2)
+
+    if phi1.ndim == 1:
+        phi1 = phi1[:, np.newaxis]
+
+    if phi2.ndim == 1:
+        phi2 = phi2[:, np.newaxis]
+
+    A = np.sum(phi1.T * np.conj(phi1.T), axis=1)[:, np.newaxis]
+    B = np.sum(phi2.T * np.conj(phi2.T), axis=1)[:, np.newaxis]
+    norms = np.abs(A @ B.T)
+
+    if conjugates:
+        macs = np.maximum(abs(phi1.T @ np.conj(phi2)) ** 2 / norms, abs(phi1.T @ phi2) ** 2 / norms)  # maximum = element-wise max
+    else:
+        macs = abs(phi1.T @ np.conj(phi2)) ** 2 / norms
+
+    # Alternative formulation
+    if return_alternative:
+        macs2 = np.zeros((len(phi1.T),len(phi2.T)))
+        for i, mode1 in enumerate(phi1.T):
+            for k, mode2 in enumerate(phi2.T):
+                if conjugates:
+                    macs2[i,k] = np.maximum(np.abs(mode1 @ np.conj(mode2))**2, np.abs(mode1 @ mode2)**2)/((mode1.T @ np.conj(mode1)) * (mode2.T @ np.conj(mode2)))
+                else:
+                    macs2[i,k] = np.abs(mode1 @ np.conj(mode2))**2/((mode1.T @ np.conj(mode1)) * (mode2.T @ np.conj(mode2)))
+        macs2 = np.real(macs2)
+        macs = np.real(macs)
+        return macs, macs2
+
+    macs = np.real(macs)
+    return macs
+
+
+def mpcval(phi):
+    # Based on the current paper:
+    # Pappa, R. S., Elliott, K. B., & Schenk, A. (1993). 
+    # Consistent-mode indicator for the eigensystem realization algorithm. 
+    # Journal of Guidance, Control, and Dynamics, 16(5), 852–858.
+
+    # Ensure on matrix format
+    if phi.ndim == 1:
+        phi = phi[:, np.newaxis]
+
+    n_modes = np.shape(phi)[1]
+    mpc_val = [None] * n_modes
+
+    for mode in range(0, n_modes):
+        phin = phi[:, mode]
+        Sxx = np.dot(np.real(phin), np.real(phin))
+        Syy = np.dot(np.imag(phin), np.imag(phin))
+        Sxy = np.dot(np.real(phin), np.imag(phin))
+
+        if 2 * Sxy != 0:
+            eta = (Syy - Sxx) / (2 * Sxy)
+            lambda1 = (Sxx + Syy) / 2 + Sxy * np.sqrt(eta ** 2 + 1)
+            lambda2 = (Sxx + Syy) / 2 - Sxy * np.sqrt(eta ** 2 + 1)
+            mpc_val[mode] = ((lambda1 - lambda2) / (lambda1 + lambda2)) ** 2
+        else:
+            mpc_val[mode] = np.nan  # Set MPC value to NaN if 2*Sxy is zero
+
+    mpc_val = np.array(mpc_val)
+    return mpc_val
+
+
+def maxreal(phi, normalize=False):
+    """
+    Rotate complex vectors (stacked column-wise) such that the absolute values of the real parts are maximized.
+
+    Arguments
+    ---------------------------
+    phi : double
+        complex-valued modal transformation matrix (column-wise stacked mode shapes)
+
+    Returns
+    ---------------------------
+    phi_max_real : boolean
+        complex-valued modal transformation matrix, with vectors rotated to have maximum real parts
+    """   
+    # Check if phi is a 1D array
+    if phi.ndim == 1:
+        phi = phi[:, np.newaxis]
+        flatten = True
+    else:
+        flatten = False
+        
+    angles = np.expand_dims(np.arange(0,np.pi, 0.01), axis=0)
+    phi_max_real = np.zeros(np.shape(phi)).astype('complex')
+    for mode in range(0,np.shape(phi)[1]):
+        rot_mode = np.dot(np.expand_dims(phi[:, mode], axis=1), np.exp(angles*1j))
+        max_angle_ix = np.argmax(np.sum(np.real(rot_mode)**2,axis=0), axis=0)
+
+        phi_max_real[:, mode] = phi[:, mode] * np.exp(angles[0, max_angle_ix]*1j)*np.sign(sum(np.real(phi[:, mode])))
+    
+    if normalize:
+        for mode in range(0,np.shape(phi)[1]):
+            phi_max_real[:, mode] = phi_max_real[:, mode]/np.max(np.abs(phi_max_real[:, mode]))
+    
+    if flatten:
+        phi_max_real = phi_max_real.flatten()
+        
+    return phi_max_real
+
+
+def force_collinearity(phi):
+    """
+    Rotate complex vectors (stacked column-wise) such that the absolute values of the real parts are maximized and rotate each component to cancel the imaginary part.
+
+    Arguments
+    ---------------------------
+    phi : double
+        complex-valued modal transformation matrix (column-wise stacked mode shapes)
+
+    Returns
+    ---------------------------
+    phi_max_real : boolean
+        complex-valued modal transformation matrix, with vectors rotated to have maximum real parts, and each component rotated to cancel the imaginary part
+    """
+    # Check if phi is a 1D array
+    if phi.ndim == 1:
+        phi = phi[:, np.newaxis]
+        flatten = True
+    else:
+        flatten = False
+
+    angles = np.expand_dims(np.arange(0,np.pi, 0.01), axis=0)
+    phi_max_real = np.zeros(np.shape(phi)).astype('complex')
+    for mode in range(0,np.shape(phi)[1]):
+        rot_mode = np.dot(np.expand_dims(phi[:, mode], axis=1), np.exp(angles*1j))
+        max_angle_ix = np.argmax(np.sum(np.real(rot_mode)**2,axis=0), axis=0)
+
+        phi_max_real[:, mode] = phi[:, mode] * np.exp(angles[0, max_angle_ix]*1j)*np.sign(sum(np.real(phi[:, mode])))
+        for el in range(0, np.shape(phi)[0]):
+            if np.angle(phi_max_real[el, mode]) < np.pi/2 or np.angle(phi_max_real[el, mode]) >= 3/2*np.pi:
+                phi_max_real[el, mode] = phi_max_real[el, mode] * np.exp(1j* -np.angle(phi_max_real[el, mode]))
+            else:
+                phi_max_real[el, mode] = phi_max_real[el, mode] * np.exp(1j* (np.pi - np.angle(phi_max_real[el, mode])))
+                print('hey')
+    if flatten:
+        phi_max_real = phi_max_real.flatten()
+
+    return phi_max_real

@@ -2,8 +2,8 @@ import numpy as np
 import scipy as sp
 
 
-def signal_preprocess(data, fs_orig, fs_new, hipass_freq=None, lopass_freq=None, hipass_order=4, lopass_order=4, lowpass_filter='iir',
-                    detrend_type=None, axis=0):
+def signal_preprocess(data, fs_orig, fs_new, hipass_freq=None, hipass_order=4, lowpass_filter='iir',
+                    detrend_type='linear', axis=0):
     """
     Noted: It is not suggested to go above 0.25 Hz when hi-passing the signal, otherwise it will start to distort.
            Also it is not suggested to go above 4-order for the buttehrworth filter
@@ -42,12 +42,7 @@ def signal_preprocess(data, fs_orig, fs_new, hipass_freq=None, lopass_freq=None,
         for i in range(len(data_tmp)):
             data_tmp[i] = sp.signal.sosfilt(sos, data_tmp[i], axis=axis)
 
-    if lopass_freq is not None:
-        sos = sp.signal.butter(lopass_order, lopass_freq, 'lowpass', fs=fs_orig, output='sos')
-        for i in range(len(data_tmp)):
-            data_tmp[i] = sp.signal.sosfilt(sos, data_tmp[i], axis=axis)
-
-    if fs_new is not None and fs_new != fs_orig:
+    if fs_new is not None:
         for i in range(len(data_tmp)):
             data_tmp[i] = sp.signal.decimate(data_tmp[i], int(fs_orig/fs_new), n=None, ftype=lowpass_filter, axis=axis)
 

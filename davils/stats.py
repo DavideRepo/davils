@@ -3,6 +3,32 @@ import scipy as sp
 from matplotlib import pyplot as plt
 
 
+def cov_dist(position, mean, std, l_scale, plot_kernel=False):
+
+    cov = np.zeros([position.shape[0], position.shape[0]])
+    if plot_kernel:
+        plt.figure()
+        plt.plot(np.linspace(0, 100, 100), np.exp(-(np.linspace(0, 100, 100) ** 2) / (2 * l_scale ** 2)) * 0.7 + 0.3)
+        plt.xlabel('Distance [m]')
+        plt.ylabel('Kernel function [-]')
+        plt.title('Kernel (correlation) function over distance')
+        
+    for j in range(position.shape[0]):
+        for i in range(position.shape[0]):
+            if i != j and sp.spatial.distance.euclidean(position[i, 1:], position[j, 1:]) != 0:
+                cov[i][j] = std ** 2 * (np.exp(-(sp.spatial.distance.euclidean(position[i, 1:], position[j, 1:]) ** 2) /
+                                              (2 * l_scale ** 2)) * 0.7 + 0.3)
+            else:
+                cov[i][j] = std ** 2
+
+        lam1, v1 = np.linalg.eig(cov)  # Solve eigenvalue problem using scipy
+        cov_mod = v1.T @ cov @ v1  # Transform cov. matrix to uncorrelated space
+        # var_mod = np.random.normal(np.full(len(position), mean), np.diag(cov_mod) ** 0.5)
+        # var = np.linalg.inv(v1.T) @ var_mod  # Transform to correlated space        
+        var = np.random.multivariate_normal(np.full(len(position), mean), cov)
+    return var, cov, cov_mod
+
+
 def get_corr_matrix(cov,plot=False):
     std = np.sqrt(np.diag(cov))
     corr = cov/np.outer(std,std)
