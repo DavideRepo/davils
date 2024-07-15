@@ -245,6 +245,23 @@ def mac(modes1, modes2):
 
 
 def simulate_lti(system, u, t, in_noise=None, out_noise=None):
+    """
+    Simulates a Linear Time Invariant (LTI) system in state-space form.
+
+    Parameters:
+    - system (scipy.signal.lti or scipy.signal.dlti): The LTI system to be simulated. If the system is continuous-time (lti),
+      it will be converted to a discrete-time system (dlti) using zero-order hold with the given time vector `t`.
+    - u (ndarray): The input signal array of shape (m, len(t)), where m is the number of inputs and len(t) is the number of time steps.
+    - t (ndarray): The time vector.
+    - in_noise (ndarray, optional): The input noise array of shape (n, len(t)), where n is the number of states. If None, it defaults to zero noise.
+    - out_noise (ndarray, optional): The output noise array of shape (p, len(t)), where p is the number of outputs. If None, it defaults to zero noise.
+
+    Returns:
+    - t (ndarray): The time vector.
+    - y (ndarray): The output signal array of shape (p, len(t)), where p is the number of outputs.
+    - x (ndarray): The state trajectory array of shape (n, len(t)), where n is the number of states.
+    """
+
     if system.dt is None:
         dt = t[1] - t[0]
         Ad = sp.linalg.expm(system.A * dt)

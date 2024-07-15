@@ -23,3 +23,8 @@ def lag_finder(y1, y2, fs):
     plt.ylabel('Correlation coeff')
     plt.show()
 
+def is_pos_def(x):
+    return np.all(np.linalg.eigvals(x) > 0)
+
+def is_diag(x):
+    return np.allclose(x, np.diag(np.diagonal(x)))

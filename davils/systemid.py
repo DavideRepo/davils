@@ -369,8 +369,10 @@ def FDD(data_PSD, f_PSD, f_s, plot=False, plotLim=None, plotLog=False, findPeaks
                        colors="grey", linestyles="dashed")
             plt.xlim(0, plotLim)
             plt.grid()
-
-    return S_val[:num_s_val,:], S_vec_sx[:,:num_s_val,:], S_vec_dx[:num_s_val,:,:]
+    if num_s_val == 1:
+        return S_val[0,:], S_vec_sx[:,0,:], S_vec_dx[0,:,:]
+    else:
+        return S_val[:num_s_val,:], S_vec_sx[:,:num_s_val,:], S_vec_dx[:num_s_val,:,:]
 
 
 def FDD_modes(S_val, S_vec, peaks_index=None, plot=None, model=None):
