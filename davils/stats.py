@@ -44,17 +44,16 @@ def get_corr_matrix(cov,plot=False):
     return corr
 
 
-def get_maha_dist(train_set, val_set, test_set, train_set_msd=True):
-
+def get_maha_dist_deprecated(train_set, val_set=None, test_set=None):
+    
     mean = np.mean(train_set, axis=1)
     cov = np.cov(train_set)
     std = np.diag(cov)**0.5
     cov_inv = np.linalg.inv(cov)
 
     msd_train = []
-    if train_set_msd is True:
-        for el in np.transpose(train_set):
-            msd_train.append(sp.spatial.distance.mahalanobis(el, mean, cov_inv) ** 2)
+    for el in np.transpose(train_set):
+        msd_train.append(sp.spatial.distance.mahalanobis(el, mean, cov_inv) ** 2)
 
     msd_val = []
     if val_set is not None:
@@ -68,4 +67,33 @@ def get_maha_dist(train_set, val_set, test_set, train_set_msd=True):
 
     return msd_test, msd_val, msd_train
 
+
+
+class MahalanobisDistance:
+    """
+    Class to compute the Mahalanobis sqaured distance for a given dataset.
+    Datasets should be a 2D numpy array with samples in rows and features in columns.
+    """
+    def __init__(self):
+        self.mean = None
+        self.cov = None
+        self.cov_inv = None
+
+    def fit(self, dataset):
+        """
+        Fit the Mahalanobis distance model to the given dataset.
+        :param dataset: 2D numpy array with samples in rows and features in columns.
+        :return: None
+        """
+        self.mean = np.mean(dataset, axis=0)
+        self.cov = np.cov(dataset, rowvar=False)
+        self.cov_inv = np.linalg.inv(self.cov)
+
+    def get_dist(self, dataset):
+        """
+        Compute the Mahalanobis distance for the given dataset.
+        :param dataset: 2D numpy array with samples in rows and features in columns.
+        :return: List of Mahalanobis distances for each sample in the dataset.
+        """
+        return [sp.spatial.distance.mahalanobis(sample, self.mean, self.cov_inv) ** 2 for sample in dataset]
 

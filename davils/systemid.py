@@ -1,9 +1,13 @@
 import numpy as np
 import scipy as sp
+import numba as nb
 from matplotlib import pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap, ListedColormap, BoundaryNorm
 import mplcursors
 from .dynamics import mpcval as mpc
+from scipy.linalg import svd
+import jax.scipy as jsp
+
 
 def moving_average(data, n=3):
 
@@ -227,7 +231,7 @@ def rdn_noise(nodes, dofs_in_nodes, t, std_scale, dist_corr=[False, None],  rota
     return X, LoadCovMat, LoadCovMat_modal
 
 
-def PSD_matrix(data, window, f_s, plot=False, findPeaks=False, plotOverlay=False, f_n=None, f_plot=None):
+def PSD_matrix(data, window, f_s, zero_pad=None, plot=False, plotOverlay=False, f_n=None, f_plot=None):
     """
     This function computes the (Cross) Power Spectral Density Matrix of the signal data, according to Welch method.
 
@@ -248,20 +252,62 @@ def PSD_matrix(data, window, f_s, plot=False, findPeaks=False, plotOverlay=False
         data = data.T
 
     nch = data.shape[0]
-    f_CSD, _ = sp.signal.csd(data[0, :], data[0, :], f_s, window)
-
+    f_CSD, _ = sp.signal.csd(data[0, :], data[0, :], f_s, window, nfft=zero_pad)
     data_CSD = np.zeros((nch, nch, len(f_CSD)), dtype=complex)
 
     for i in range(nch):
         for j in range(nch):
-            _, data_CSD[i, j, :] = sp.signal.csd(data[i, :], data[j, :], f_s, window)
+            _, data_CSD[i, j, :] = sp.signal.csd(data[i, :], data[j, :], f_s, window, nfft=zero_pad)
+
+    if plot:
+        if not f_plot:
+            f_plot = f_CSD[-1]
+        fig, axs = plt.subplots(nch, nch, figsize=(20, 15))
+        for i in range(nch):
+            for k in range(nch):
+                axs[i, k].plot(f_CSD[f_CSD <= f_plot], np.real(data_CSD[i, k, f_CSD <= f_plot]))
+                axs[i, k].plot(f_CSD[f_CSD <= f_plot], np.imag(data_CSD[i, k, f_CSD <= f_plot]))
+                axs[i, k].grid(True)
+        for k in range(nch):
+            axs[i, k].set_xlabel("Freq. [Hz]")
+        plt.tight_layout()
+
+    return f_CSD, data_CSD
+
+
+def PSD_matrix_jax(data, window, f_s, zero_pad=None, plot=False, findPeaks=False, plotOverlay=False, f_n=None, f_plot=None):
+    """
+    This function computes the (Cross) Power Spectral Density Matrix of the signal data, according to Welch method.
+
+    Returns:
+      f_CSD     - [numpy array], array of the discretized frequencies after Welch smoothening
+      data_CSD  - [numpy array, complex] (nch*nch*len(f_CSD)), the (Cross) Power Spectral Density Matrix of the signal(s)
+      peaks     - if findPeaks=True, [numpy array] with as columns: peak number, peak index, peak value of the overlayed
+                (normalized) cross power spectra plot ("peak-picking" method)
+
+    Requires as input:
+      data      - [List] or [numpy array] (nch*l), with signal(s) on one dimensions and number of channels in the other
+      window    - [windows class], window function used for Welch method
+      f_s       - [int], sampling freq. of the signal(s)
+    """
+
+    data = np.array(data)
+    if data.shape[0] > data.shape[1]: # Transpose data if channels are in columns
+        data = data.T
+
+    nch = data.shape[0]
+    f_CSD, _ = sp.signal.csd(data[0, :], data[0, :], f_s, window, nfft=zero_pad)
+    data_CSD = np.zeros((nch, nch, len(f_CSD)), dtype=complex)
+
+    for i in range(nch):
+        for j in range(nch):
+            _, data_CSD[i, j, :] = jsp.signal.csd(data[i, :], data[j, :], f_s, window, nfft=zero_pad)
 
     if plot:
         if not f_plot:
             f_plot = f_CSD[-1]
 
         fig, axs = plt.subplots(nch, nch, figsize=(20, 15))
-
         for i in range(nch):
             for k in range(nch):
                 axs[i, k].plot(f_CSD[f_CSD <= f_plot], np.real(data_CSD[i, k, f_CSD <= f_plot]))
@@ -275,31 +321,49 @@ def PSD_matrix(data, window, f_s, plot=False, findPeaks=False, plotOverlay=False
 
     peaks = []
 
-    if plotOverlay:
-        if not f_plot:
-            f_plot = f_CSD[-1]
-
-        overlay_CSD = np.zeros(len(f_CSD))
-
-        for i in range(nch):
-            overlay_CSD =+ np.real(data_CSD[i, i])/np.amax(np.real(data_CSD[i, i]))
-
-        plt.figure()
-        plt.plot(f_CSD, np.real(overlay_CSD))
-
-        if findPeaks:
-            peaks = find_those_peaks(f_CSD, overlay_CSD)
-            plt.plot(f_CSD[peaks[:,1]], overlay_CSD[peaks[:,1]], "*")
-
-        plt.vlines(f_n, np.zeros(len(f_n)), np.ones(len(f_n)) * np.max(overlay_CSD),
-                   colors="grey", linestyles="dashed")
-        plt.xlim(0, f_plot)
-        plt.grid()
-
     return f_CSD, data_CSD, peaks
 
 
-def FDD(data_PSD, f_PSD, f_s, plot=False, plotLim=None, plotLog=False, findPeaks=False, f_n=None, num_s_val=None):
+@nb.njit(parallel=True)
+def PSD_matrix_numba(data, window, f_s, zero_pad=None):
+    """
+    Computes the cross-spectral density (CSD) matrix for multi-channel data using Welch's method.
+
+    Parameters:
+    -----------
+    data : numpy.ndarray
+        2D array with shape (nch, l), where nch is the number of channels and l is the signal length.
+    window : array-like or callable
+        Window function to be used in Welch's method.
+    f_s : int
+        Sampling frequency of the signal.
+    zero_pad : int, optional
+        Length of the FFT used, if different from the signal length (for zero-padding). Defaults to None.
+
+    Returns:
+    --------
+    f_PSD : numpy.ndarray
+        Frequency values corresponding to the PSD estimates.
+    PSD : numpy.ndarray
+        3D array of shape (nch, nch, len(f_PSD)) containing the cross-spectral density matrix for each channel pair.
+    """
+    nch = data.shape[0]
+
+    # Compute frequency values using the first signal
+    f_PSD, _ = sp.signal.csd(data[0, :], data[0, :], f_s, window, nfft=zero_pad, dtype=float)
+
+    # Preallocate PSD matrix
+    PSD = np.zeros((nch, nch, len(f_PSD)), dtype=complex)
+
+    # Fill PSD matrix with cross-spectral density for each channel pair
+    for i in nb.prange(nch):
+        for j in range(nch):
+            _, PSD[i, j, :] = sp.signal.csd(data[i, :], data[j, :], f_s, window, nfft=zero_pad)
+
+    return f_PSD, PSD
+
+
+def FDD(data_PSD, f_PSD, f_s, vec=None, plot=False, plotLim=None, plotLog=False, findPeaks=False, f_n=None, n_sval=None):
     """
     This function performs the Frequency Domain Decomposition of data in input.
 
@@ -321,6 +385,7 @@ def FDD(data_PSD, f_PSD, f_s, plot=False, plotLim=None, plotLog=False, findPeaks
     nf = len(data_PSD[0][0])
 
     S_val = np.zeros((nch, nf))
+
     S_vec_sx = np.zeros((nch, nch, nf), dtype='complex')
     S_vec_dx = np.zeros((nch, nch, nf), dtype='complex')
     # S_vec_sx = [np.zeros((nch, nch)) for _ in range(nf)]
@@ -358,21 +423,80 @@ def FDD(data_PSD, f_PSD, f_s, plot=False, plotLim=None, plotLog=False, findPeaks
         if plotLog:
             plt.yscale("log")
 
+        if f_n is not None:
+            plt.vlines(f_n, np.zeros(len(f_n)), np.ones(len(f_n)) * np.max(S_val[:3, f_PSD <= plotLim]),
+                       colors="grey", linestyles="dashed")
+
         plt.xlim(0, plotLim)
         plt.grid()
         plt.legend()
         plt.title("Singular values")
+        plt.tight_layout()
         plt.show()
 
-        if f_n is not None:
-            plt.vlines(f_n, np.zeros(len(f_n)), np.ones(len(f_n)) * np.max(S_val[:3, f_PSD <= plotLim]),
-                       colors="grey", linestyles="dashed")
-            plt.xlim(0, plotLim)
-            plt.grid()
-    if num_s_val == 1:
-        return S_val[0,:], S_vec_sx[:,0,:], S_vec_dx[0,:,:]
-    else:
-        return S_val[:num_s_val,:], S_vec_sx[:,:num_s_val,:], S_vec_dx[:num_s_val,:,:]
+    return S_val[:n_sval,:], S_vec_sx[:,:n_sval,:], S_vec_dx[:n_sval,:,:]
+
+
+@nb.njit(parallel=True)
+def FDD_numba(PSD_matrix, f_PSD, f_s, n_sval=1):
+    """
+    Perform Frequency Domain Decomposition (FDD) on the given PSD matrix.
+
+    Parameters:
+    -----------
+    PSD_matrix : numpy.ndarray
+        3D array of shape (nch, nch, nf) representing the cross-spectral density matrix for each frequency.
+    f_PSD : numpy.ndarray
+        1D array of frequency values corresponding to the PSD matrix.
+    f_s : int
+        Sampling frequency of the signal.
+    n_sval : int, optional
+        Number of singular values and vectors to return. Defaults to 1.
+
+    Returns:
+    --------
+    sval : numpy.ndarray
+        2D array of shape (n_sval, nf) containing the singular values at each frequency.
+    svec_sx : numpy.ndarray
+        3D array of shape (nch, n_sval, nf) containing the left singular vectors at each frequency.
+    svec_dx : numpy.ndarray
+        3D array of shape (n_sval, nch, nf) containing the right singular vectors at each frequency.
+    """
+    nch = len(PSD_matrix)
+    nf = len(PSD_matrix[0][0])
+
+    sval = np.zeros((n_sval, nf), dtype='float')
+    svec_sx = np.zeros((nch, n_sval, nf), dtype='complex')
+    svec_dx = np.zeros((n_sval, nch, nf), dtype='complex')
+
+    # Parallelize over the frequency bins (nf)
+    for i in nb.prange(nf):  # nb.prange allows Numba to parallelize this loop
+        U, S, Vt = np.linalg.svd(PSD_matrix[:, :, i], full_matrices=False)
+
+        sval[:, i] = np.sqrt(S[:n_sval])
+        svec_sx[:, :n_sval, i] = U[:, :n_sval]
+        svec_dx[:n_sval, :, i] = Vt[:n_sval, :]
+
+    return sval, svec_sx, svec_dx
+
+
+@nb.njit(parallel=True, fastmath=True)
+def FDD_numba_alt(PSD_matrix, f_PSD, f_s, n_sval=1):
+    nch = len(PSD_matrix)
+    nf = PSD_matrix.shape[2]
+
+    sval = np.zeros((n_sval, nf), dtype=np.float64)
+    svec_sx = np.zeros((nch, n_sval, nf), dtype=np.complex128)
+    svec_dx = np.zeros((n_sval, nch, nf), dtype=np.complex128)
+
+    for i in nb.prange(nf):
+        U, S, Vh = svd(PSD_matrix[:, :, i], full_matrices=False, overwrite_a=True, lapack_driver='gesdd')
+
+        sval[:, i] = np.sqrt(S[:n_sval])
+        svec_sx[:, :n_sval, i] = U[:, :n_sval]
+        svec_dx[:n_sval, :, i] = Vh[:n_sval, :]
+
+    return sval, svec_sx, svec_dx
 
 
 def FDD_modes(S_val, S_vec, peaks_index=None, plot=None, model=None):

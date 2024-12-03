@@ -1,6 +1,7 @@
 import numpy as np
 import scipy as sp
 from matplotlib import pyplot as plt
+from matplotlib import colors
 
 
 def check_symmetric(a, rtol=1e-05, atol=1e-08):
@@ -28,3 +29,49 @@ def is_pos_def(x):
 
 def is_diag(x):
     return np.allclose(x, np.diag(np.diagonal(x)))
+
+def loop_cmap(cmap, max_colors):
+    """
+    Wraps a colormap to make it loop after max_colors.
+
+    Parameters:
+    - cmap: the original colormap (e.g., plt.get_cmap('tab20'))
+    - max_colors: the number of colors in the original colormap
+
+    Returns:
+    - A function that takes an index and returns a color from the looping colormap
+    """
+
+    def looped(index):
+        return cmap(index % max_colors)
+
+    return looped
+
+
+def loop_cmap_listed(cmap, max_colors):
+    """
+    Wraps a colormap to make it loop after max_colors.
+
+    Parameters:
+    - cmap: the original colormap (e.g., plt.get_cmap('tab20'))
+    - max_colors: the number of colors in the original colormap
+
+    Returns:
+    - A looping ListedColormap that repeats after max_colors
+    """
+    colors_list = [cmap(i % max_colors) for i in range(max_colors * 10)]  # Loop through ten as many colors for safety
+    return colors.ListedColormap(colors_list)
+
+
+
+def exp_dist(arr1, arr2=None, var=1.0, l_scale=0.1, squared=False):
+    if arr2 is None:
+        arr2 = arr1
+    arr1, arr2 = np.meshgrid(arr1, arr2)
+    if squared:
+        # dist = var ** 2 * np.exp(-((arr1 - arr2) / (arr1 + arr2)) ** 2 / (2 * l_scale ** 2))
+        dist = var ** 2 * np.exp(-(np.log(arr1) - np.log(arr2)) ** 2 / (2 * l_scale ** 2))
+    else:
+        dist = var ** 2 * np.exp(-np.abs((arr1 - arr2) / (arr1 + arr2)) / l_scale)
+    dist = np.nan_to_num(dist)
+    return dist

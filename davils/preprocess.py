@@ -32,7 +32,7 @@ def signal_preprocess(data, fs_orig, fs_new, hipass_freq=None, lopass_freq=None,
             data_tmp = [data] 
         else:
             raise ValueError("Input data must have 1 or 2 dimensions, not more.")
-    
+
     if detrend_type is not None:
         for i in range(len(data_tmp)):
             data_tmp[i] = sp.signal.detrend(data_tmp[i], axis=axis, type=detrend_type, overwrite_data=True)
@@ -53,8 +53,6 @@ def signal_preprocess(data, fs_orig, fs_new, hipass_freq=None, lopass_freq=None,
 
     if isinstance(data, dict):
         return {key: data_tmp[i] for i, key in enumerate(data.keys())}
-    elif isinstance(data, list):
-        return data_tmp
     else:
-        return data_tmp[0]
+        return data_tmp
 

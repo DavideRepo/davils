@@ -173,7 +173,7 @@ def get_state_space_modal(omega, phi, gamma, mass=None, dt=None, s_u=None, s_a=N
     Outputs are *physical* displacements, *physical* velocities, and *physical* accelerations (in this order). Cc and Dc
     matrices are defined accordingly.
 
-    :param omega: Mass matrix of the system (n_dof * n_dof)
+    :param omega: Modal matrix of the system (n_dof * n_dof)
     :param phi: Stiffness matrix of the system (n_dof * n_dof)
     :param gamma: Damping matrix of the system (n_dof * n_dof)
     :param dt: Time-step for discrete formulation (s)
@@ -202,7 +202,9 @@ def get_state_space_modal(omega, phi, gamma, mass=None, dt=None, s_u=None, s_a=N
     I = np.eye(len(omega))                                               # Zeros matrix (n_dof x n_dof)
 
     Ac = np.vstack((np.hstack((O, I)), np.hstack((-omega**2, -gamma))))  # System (State) Matrix Ac (2*n_dof x 2*n_dof)
-
+    # make sure Ac is not singular
+    # Ac = Ac + 1e-12 * np.eye(len(Ac))
+    
     Bc = np.vstack((O @ phi.T @ s_u, phi.T @ m_i @ s_u))                 # Input Influence Matrix Bc (2*n_dof x n_input)
 
     c1 = np.hstack((s_d.T @ phi, s_d.T @ phi @ O))                       # Displacements rows
@@ -213,16 +215,15 @@ def get_state_space_modal(omega, phi, gamma, mass=None, dt=None, s_u=None, s_a=N
     Dc = np.vstack((np.zeros_like(s_d.T @ s_u), np.zeros_like(s_v.T @ s_u), s_a.T @ phi @ phi.T @ s_u))  # Direct Transmission Matrix
                                                                          # Dc (n_output*n_dof x n_input=n_dof)
 
-    system_clti = sp.signal.lti(Ac, Bc, Cc, Dc)                          # Continuous-time linear time invariant system
-    system_dlti = None
-
     if dt is not None:
         Ad = sp.linalg.expm(Ac * dt)
         Bd = (Ad - np.eye(len(Ad))) @ np.linalg.inv(Ac) @ Bc
 
         system_dlti = sp.signal.dlti(Ad, Bd, Cc, Dc, dt=dt)              # Discrete-time linear time invariant system
-
-    return system_clti, system_dlti
+        return system_dlti
+    else:
+        system_clti = sp.signal.lti(Ac, Bc, Cc, Dc)  # Continuous-time linear time invariant system
+        return system_clti
 
 
 def mac(modes1, modes2):
@@ -526,10 +527,6 @@ def xmacmat_alt(phi1, phi2=None, conjugates=True, return_alternative=False):
     if phi2 is None:
         phi2 = phi1
 
-    # if isinstance(phi1, list) and isinstance(phi2, list):
-    #     phi1=np.array(phi1)
-    #     phi2=np.array(phi2)
-
     if phi1.ndim == 1:
         phi1 = phi1[:, np.newaxis]
 
@@ -591,6 +588,112 @@ def mpcval(phi):
 
     mpc_val = np.array(mpc_val)
     return mpc_val
+
+
+def xmpcmat(phi1, phi2):
+    # Ensure both inputs are in matrix format
+    if phi1.ndim == 1:
+        phi1 = phi1[:, np.newaxis]
+    if phi2.ndim == 1:
+        phi2 = phi2[:, np.newaxis]
+
+    # Check that both phi1 and phi2 have the same number of modes
+    n_modes1 = np.shape(phi1)[1]
+    n_modes2 = np.shape(phi2)[1]
+    cross_mpc_matrix = np.zeros((n_modes1, n_modes2))
+
+    for mode1 in range(n_modes1):
+        phin1 = phi1[:, mode1]
+
+        for mode2 in range(n_modes2):
+            phin2 = phi2[:, mode2]
+
+            # Compute Sxx, Syy, and Sxy using phi1 and phi2
+            Sxx = np.dot(np.real(phin1), np.real(phin2))
+            Syy = np.dot(np.imag(phin1), np.imag(phin2))
+            Sxy = np.dot(np.real(phin1), np.imag(phin2))
+
+            # Calculate cross-MPC
+            if 2 * Sxy != 0:
+                eta = (Syy - Sxx) / (2 * Sxy)
+                lambda1 = (Sxx + Syy) / 2 + Sxy * np.sqrt(eta ** 2 + 1)
+                lambda2 = (Sxx + Syy) / 2 - Sxy * np.sqrt(eta ** 2 + 1)
+                cross_mpc_matrix[mode1, mode2] = ((lambda1 - lambda2) / (lambda1 + lambda2)) ** 2
+            else:
+                cross_mpc_matrix[mode1, mode2] = np.nan  # Set MPC value to NaN if 2*Sxy is zero
+
+    return cross_mpc_matrix
+
+
+def xmpcmat_alt(phi1, phi2):
+    # Based on the current paper:
+    # Pappa, R. S., Elliott, K. B., & Schenk, A. (1993).
+    # Consistent-mode indicator for the eigensystem realization algorithm.
+    # Journal of Guidance, Control, and Dynamics, 16(5), 852–858.
+
+    # Ensure on matrix format
+    if phi1.ndim == 1:
+        phi1 = phi1[:, np.newaxis]
+    if phi2.ndim == 1:
+        phi2 = phi2[:, np.newaxis]
+
+    n_modes1 = np.shape(phi1)[1]
+    n_modes2 = np.shape(phi2)[1]
+    mpc_mat = np.zeros((n_modes1, n_modes2))
+
+    for mode1 in range(0, n_modes1):
+        phin1 = phi1[:, mode1]
+        for mode2 in range(0, n_modes2):
+            Sxx = np.dot(np.real(phin1), np.real(phin2))
+            Syy = np.dot(np.imag(phin1), np.imag(phin2))
+            Sxy = np.dot(np.real(phin1), np.imag(phin2))
+
+            if Sxy != 0:
+                eta = (Syy - Sxx) / (2 * Sxy)
+                lambda1 = (Sxx + Syy) / 2 + Sxy * np.sqrt(eta ** 2 + 1)
+                lambda2 = (Sxx + Syy) / 2 - Sxy * np.sqrt(eta ** 2 + 1)
+                mpc_mat[mode1, mode2] = ((lambda1 - lambda2) / (lambda1 + lambda2)) ** 2
+            else:
+                mpc_mat[mode1, mode2] = np.nan  # Set MPC value to NaN if 2*Sxy is zero
+
+    return mpc_mat
+
+
+def normalized_cross_mpcval(phi1, phi2):
+    # Ensure both inputs are in matrix format
+    if phi1.ndim == 1:
+        phi1 = phi1[:, np.newaxis]
+    if phi2.ndim == 1:
+        phi2 = phi2[:, np.newaxis]
+
+    # Check that both phi1 and phi2 have the same number of modes
+    n_modes1 = np.shape(phi1)[1]
+    n_modes2 = np.shape(phi2)[1]
+    cross_mpc_matrix = np.zeros((n_modes1, n_modes2))
+
+    for mode1 in range(n_modes1):
+        phin1 = phi1[:, mode1]
+        norm1 = np.linalg.norm(phin1)  # Norm of phin1 for normalization
+
+        for mode2 in range(n_modes2):
+            phin2 = phi2[:, mode2]
+            norm2 = np.linalg.norm(phin2)  # Norm of phin2 for normalization
+
+            # Compute Sxx, Syy, and Sxy using phi1 and phi2 and normalize them
+            Sxx = np.dot(np.real(phin1), np.real(phin2)) / (norm1 * norm2)
+            Syy = np.dot(np.imag(phin1), np.imag(phin2)) / (norm1 * norm2)
+            Sxy = np.dot(np.real(phin1), np.imag(phin2)) / (norm1 * norm2)
+
+            # Calculate normalized cross-MPC
+            if 2 * Sxy != 0:
+                eta = (Syy - Sxx) / (2 * Sxy)
+                lambda1 = (Sxx + Syy) / 2 + Sxy * np.sqrt(eta ** 2 + 1)
+                lambda2 = (Sxx + Syy) / 2 - Sxy * np.sqrt(eta ** 2 + 1)
+                cross_mpc_matrix[mode1, mode2] = ((lambda1 - lambda2) / (lambda1 + lambda2)) ** 2
+            else:
+                cross_mpc_matrix[mode1, mode2] = 0.0  # Set to 0 if 2*Sxy is zero
+
+    return cross_mpc_matrix
 
 
 def maxreal(phi, normalize=False):
