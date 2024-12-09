@@ -275,55 +275,6 @@ def PSD_matrix(data, window, f_s, zero_pad=None, plot=False, plotOverlay=False, 
     return f_CSD, data_CSD
 
 
-def PSD_matrix_jax(data, window, f_s, zero_pad=None, plot=False, findPeaks=False, plotOverlay=False, f_n=None, f_plot=None):
-    """
-    This function computes the (Cross) Power Spectral Density Matrix of the signal data, according to Welch method.
-
-    Returns:
-      f_CSD     - [numpy array], array of the discretized frequencies after Welch smoothening
-      data_CSD  - [numpy array, complex] (nch*nch*len(f_CSD)), the (Cross) Power Spectral Density Matrix of the signal(s)
-      peaks     - if findPeaks=True, [numpy array] with as columns: peak number, peak index, peak value of the overlayed
-                (normalized) cross power spectra plot ("peak-picking" method)
-
-    Requires as input:
-      data      - [List] or [numpy array] (nch*l), with signal(s) on one dimensions and number of channels in the other
-      window    - [windows class], window function used for Welch method
-      f_s       - [int], sampling freq. of the signal(s)
-    """
-
-    data = np.array(data)
-    if data.shape[0] > data.shape[1]: # Transpose data if channels are in columns
-        data = data.T
-
-    nch = data.shape[0]
-    f_CSD, _ = sp.signal.csd(data[0, :], data[0, :], f_s, window, nfft=zero_pad)
-    data_CSD = np.zeros((nch, nch, len(f_CSD)), dtype=complex)
-
-    for i in range(nch):
-        for j in range(nch):
-            _, data_CSD[i, j, :] = jsp.signal.csd(data[i, :], data[j, :], f_s, window, nfft=zero_pad)
-
-    if plot:
-        if not f_plot:
-            f_plot = f_CSD[-1]
-
-        fig, axs = plt.subplots(nch, nch, figsize=(20, 15))
-        for i in range(nch):
-            for k in range(nch):
-                axs[i, k].plot(f_CSD[f_CSD <= f_plot], np.real(data_CSD[i, k, f_CSD <= f_plot]))
-                axs[i, k].plot(f_CSD[f_CSD <= f_plot], np.imag(data_CSD[i, k, f_CSD <= f_plot]))
-                axs[i, k].grid(True)
-
-        for k in range(nch):
-            axs[i, k].set_xlabel("Freq. [Hz]")
-
-        plt.tight_layout()
-
-    peaks = []
-
-    return f_CSD, data_CSD, peaks
-
-
 @nb.njit(parallel=True)
 def PSD_matrix_numba(data, window, f_s, zero_pad=None):
     """
