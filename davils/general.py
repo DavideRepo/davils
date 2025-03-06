@@ -2,6 +2,7 @@ import numpy as np
 import scipy as sp
 from matplotlib import pyplot as plt
 from matplotlib import colors
+from colorsys import hls_to_rgb
 
 
 def check_symmetric(a, rtol=1e-05, atol=1e-08):
@@ -63,7 +64,6 @@ def loop_cmap_listed(cmap, max_colors):
     return colors.ListedColormap(colors_list)
 
 
-
 def exp_dist(arr1, arr2=None, var=1.0, l_scale=0.1, squared=False):
     if arr2 is None:
         arr2 = arr1
@@ -75,3 +75,33 @@ def exp_dist(arr1, arr2=None, var=1.0, l_scale=0.1, squared=False):
         dist = var ** 2 * np.exp(-np.abs((arr1 - arr2) / (arr1 + arr2)) / l_scale)
     dist = np.nan_to_num(dist)
     return dist
+
+
+def colorize_complex(z, sat=None):
+    """
+    Converts a complex array to an RGB image using hue, lightness, and saturation.
+
+    Parameters:
+    - z (np.ndarray): Complex input array.
+    - sat (float, optional): Saturation value. If None, it is computed adaptively.
+
+    Returns:
+    - np.ndarray: RGB image array.
+    """
+    r = np.abs(z)
+    arg = np.angle(z)
+    h = (arg + np.pi) / (2 * np.pi) + 0.5  # Hue maps phase [-pi, pi] to [0,1]
+    r_max = np.percentile(r, 95)  # Adaptive scale based on data spread
+    l = np.tanh(r / r_max)  # Smooth lightness variation
+
+    if sat:
+        s = sat
+    else:
+        s = 0.8 + 0.2 * (r / (r + 1))  # Adaptive saturation
+        # s = np.clip(1 - np.exp(-r / r_max), 0, 1)  # Exponential response
+        # s = 1 / (1 + np.exp(-5 * (r / r_max - 0.5)))  # Sigmoid-controlled saturation
+        # s = np.tanh(5 * (r / r_max - 0.5)) / 2 + 0.5  # tanh-based saturation
+
+    c = np.vectorize(hls_to_rgb)(h, l, s)
+    c = np.array(c).swapaxes(0, 2)
+    return c

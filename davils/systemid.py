@@ -363,10 +363,11 @@ def FDD(data_PSD, f_PSD, f_s, vec=None, plot=False, plotLim=None, plotLog=False,
         if plotLim is None:
             plotLim = f_PSD[-1]
 
-        plt.figure()
-        plt.plot(f_PSD, S_val[0, :], label="sv1")
-        plt.plot(f_PSD, S_val[1, :], label="sv2")
-        plt.plot(f_PSD, S_val[2, :], label="sv3")
+        plt.figure(figsize=(10,5))
+        plt.title(fr'Singular values of a PSD($\omega$) matrix')
+        plt.semilogy(f_PSD, S_val[0, :], label="sv1", linewidth=1.5)
+        plt.semilogy(f_PSD, S_val[1, :], label="sv2", linewidth=1.5)
+        plt.semilogy(f_PSD, S_val[2, :], label="sv3", linewidth=1.5)
 
         if findPeaks:
             plt.plot(peaks[:,1], peaks[:,2], 'o', linestyle='')
@@ -379,9 +380,10 @@ def FDD(data_PSD, f_PSD, f_s, vec=None, plot=False, plotLim=None, plotLog=False,
                        colors="grey", linestyles="dashed")
 
         plt.xlim(0, plotLim)
+        plt.xlabel('Frequency [Hz]')
         plt.grid()
         plt.legend()
-        plt.title("Singular values")
+        # plt.title("Singular values")
         plt.tight_layout()
         plt.show()
 
